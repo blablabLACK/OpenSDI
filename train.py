@@ -19,9 +19,19 @@ from IMDLBenCo.evaluation import PixelF1, ImageF1, ImageAccuracy, PixelAccuracy
 from IMDLBenCo.training_scripts.tester import test_one_epoch
 from IMDLBenCo.training_scripts.trainer import train_one_epoch
 
-from data.hf_datasets import HFDataset
+from data.hf_datasets import HFDataset, BalancedDataset
 from model.MaskCLIP import MaskCLIP
 from utils.argparser import get_args_parser
+
+class FLOPsWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x):
+        # 调用你定义的 forward_for_flops
+        return self.model.forward_for_flops(x)
+
 
 class Trainer:
     def __init__(self, args, model_args):
@@ -31,6 +41,11 @@ class Trainer:
         self.data_loader_train, self.data_loader_test = self.prepare_datasets_and_dataloaders()
         self.model, self.model_without_ddp, self.optimizer, self.loss_scaler, self.evaluator_list, self.eff_batch_size = self.prepare_model()
 
+    def get_params(self,size=512):
+        model = self.model_without_ddp.cuda()
+        model.eval()
+        model_summary(model, (3, size, size))
+    
     def prepare_config(self):
         misc.init_distributed_mode(self.args)
         torch.multiprocessing.set_sharing_strategy('file_system')
@@ -103,9 +118,35 @@ class Trainer:
                                                      mean=[0.485, 0.456, 0.406], 
                                                      std=[0.229, 0.224, 0.225])
 
-        dataset_train = HFDataset(
-            self.args.data_path,
-            self.args.train_split_name,
+        # dataset_train = HFDataset(
+        #     self.args.data_path,
+        #     self.args.train_split_name,
+        #     # pixel=True,
+        #     is_padding=self.args.if_padding,
+        #     is_resizing=self.args.if_resizing,
+        #     output_size=(self.args.image_size, self.args.image_size),
+        #     common_transforms=train_transform,
+        #     edge_width=self.args.edge_mask_width,
+        #     post_transform=post_function,
+        #     post_transform_sam=post_function_sam,
+        # )
+        
+        # dataset_test = HFDataset(
+        #     self.args.test_data_path,
+        #     self.args.test_split_name,
+        #     pixel=True,
+        #     is_padding=self.args.if_padding,
+        #     is_resizing=self.args.if_resizing,
+        #     output_size=(self.args.image_size, self.args.image_size),
+        #     common_transforms=test_transform,
+        #     edge_width=self.args.edge_mask_width,
+        #     post_transform=post_function,
+        #     post_transform_sam=post_function_sam,
+        # )
+        
+        dataset_train = BalancedDataset( # TODO此处修改
+            path=self.args.data_path,
+            split_name='train',
             # pixel=True,
             is_padding=self.args.if_padding,
             is_resizing=self.args.if_resizing,
@@ -116,10 +157,10 @@ class Trainer:
             post_transform_sam=post_function_sam,
         )
         
-        dataset_test = HFDataset(
-            self.args.test_data_path,
-            self.args.test_split_name,
-            pixel=True,
+        dataset_test = BalancedDataset(
+            path=self.args.test_data_path,
+            split_name='test',
+            # pixel=True,
             is_padding=self.args.if_padding,
             is_resizing=self.args.if_resizing,
             output_size=(self.args.image_size, self.args.image_size),
@@ -267,7 +308,7 @@ class Trainer:
                 args=self.args
             )
             
-            if self.args.output_dir and (epoch % 50 == 0 or epoch + 1 == self.args.epochs):
+            if self.args.output_dir and (epoch % self.args.test_period == 0 or epoch + 1 == self.args.epochs):
                 self.save_checkpoint(epoch)
 
             self.optimizer.zero_grad()
@@ -313,6 +354,33 @@ class Trainer:
         print('Training time', total_time_str)
 
 
+from fvcore.nn import FlopCountAnalysis, parameter_count
+
+def count_model(model, image_size=(3,512,512)):
+    device = next(model.parameters()).device
+    dummy = torch.randn(1, *image_size).to(device)
+
+    # 重点：包一层 Wrapper，而不是直接传函数
+    flops_model = FLOPsWrapper(model)
+
+    params = parameter_count(model)[""] / 1e6
+    flops = FlopCountAnalysis(flops_model, dummy).total() / 1e9
+
+    return flops, params
+
+
+def model_summary(model, image_size=(3,512,512)):
+    model = model.module if hasattr(model, "module") else model
+    model.eval()
+    flops, params = count_model(model, image_size)
+    print("=" * 60)
+    print(f"Model: {model.__class__.__name__}")
+    print(f"Input: {image_size}")
+    print(f"Params: {params:.2f} M")
+    print(f"FLOPs:  {flops:.2f} GFLOPs")
+    print("=" * 60)
+
+
 if __name__ == '__main__':
     args, model_args = get_args_parser()
     job_str = args.exp_name + "_" + datetime.datetime.now().strftime('%Y%m%d_%H_%M_%S')
@@ -322,6 +390,7 @@ if __name__ == '__main__':
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     trainer = Trainer(args, model_args)
+    # trainer.get_params()
     trainer.train()
 
 

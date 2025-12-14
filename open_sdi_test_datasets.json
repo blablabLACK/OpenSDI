@@ -1,0 +1,6 @@
+[
+    ["coverage", "/home/aigc_account_1/data01/AIGC/projects/OpenSDI/test_dataset_coverage.json"],
+    ["casia_v1", "/home/aigc_account_1/data01/AIGC/projects/OpenSDI/test_dataset_casia1.json"],
+    ["columbia", "/home/aigc_account_1/data01/AIGC/projects/OpenSDI/test_dataset_columbia.json"],
+    ["nist2016", "/home/aigc_account_1/data01/AIGC/projects/OpenSDI/nist_data/new.json"]
+]

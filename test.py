@@ -13,10 +13,10 @@ import IMDLBenCo.training_scripts.utils.misc as misc
 from IMDLBenCo.registry import MODELS, POSTFUNCS
 from IMDLBenCo.datasets import ManiDataset, JsonDataset
 from IMDLBenCo.transforms import get_albu_transforms
-from IMDLBenCo.evaluation import PixelF1, ImageF1, PixelIOU, ImageAUC, ImageAccuracy, PixelAccuracy
+from IMDLBenCo.evaluation import PixelF1, ImageF1, PixelIOU, ImageAUC, ImageAccuracy, PixelAccuracy, PixelAUC
 from IMDLBenCo.training_scripts.tester import test_one_epoch
 
-from data.hf_datasets import HFDataset
+from data.hf_datasets import HFDataset, BalancedDataset
 from model.MaskCLIP import MaskCLIP
 
 
@@ -127,8 +127,18 @@ def setup_dataset(args, name, pixel,split, split_file=None):
     test_transform = get_albu_transforms('test')
     post_transform = post_transforms(type_="pad" if args.if_padding else "resize",
                                              output_size=(args.image_size, args.image_size))
-    dataset = HFDataset(
-        name,split,pixel,
+    # dataset = HFDataset(
+    #     name,split,pixel,
+    #     is_padding=args.if_padding,
+    #     is_resizing=args.if_resizing,
+    #     output_size=(args.image_size, args.image_size),
+    #     common_transforms=test_transform,
+    #     post_transform=post_transform,
+    #     edge_width=args.edge_mask_width,
+    #     # post_funcs=post_function
+    # )
+    dataset = BalancedDataset(
+        name,split,pixel, # name=path, split!='train'
         is_padding=args.if_padding,
         is_resizing=args.if_resizing,
         output_size=(args.image_size, args.image_size),
@@ -163,7 +173,7 @@ def setup_dataset(args, name, pixel,split, split_file=None):
     
     return data_loader
 
-def test_on_dataset(args, model, data_loader, evaluator_list, device, log_writer):
+def test_on_dataset(args, model, data_loader, evaluator_list, device, log_writer, epoch=-1):
     test_stats = test_one_epoch(
         model=model,
         data_loader=data_loader,
@@ -174,7 +184,7 @@ def test_on_dataset(args, model, data_loader, evaluator_list, device, log_writer
         args=args
     )
 
-    log_stats = {**{f'test_{k}': v for k, v in test_stats.items()}, 'epoch': 0}
+    log_stats = {**{f'test_{k}': v for k, v in test_stats.items()}, 'epoch': epoch}
     if args.full_log_dir and misc.is_main_process():
         if log_writer is not None:
             log_writer.flush()
@@ -182,30 +192,37 @@ def test_on_dataset(args, model, data_loader, evaluator_list, device, log_writer
             f.write(json.dumps(log_stats) + "\n")
     return log_stats
 
+import json
 def main(args, model_args):
     misc.init_distributed_mode(args)
     torch.multiprocessing.set_sharing_strategy('file_system')
     print('Job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
     print("=====args:=====\n{}".format(args).replace(', ', ',\n'))
     print("=====Model args:=====\n{}".format(model_args).replace(', ', ',\n'))
-    
     device = torch.device(args.device)
+    
+    parts = args.checkpoint_path.split("checkpoint-")
+    testing_epoch = parts[1].split(".")[0]
+    print(f"[DEBUG] Testing epoch: {testing_epoch}")
 
     model = setup_model(args, model_args, device)
-    ckpt = torch.load(args.checkpoint_path, map_location='cuda')
+    ckpt = torch.load(args.checkpoint_path, map_location='cuda', weights_only=False)
     model.module.load_state_dict(ckpt['model'])
     model.eval()
     # model.load_state_dict(ckpt['model'])
     allresults = {}
-    dataset_name = "nebula/OpenSDI_test"
-    for split in ["sd15", "sd3", "sd2", "flux","sdxl"]:
-        pixel=True
-        evaluator_list = [PixelF1(threshold=0.5, mode="origin"), PixelIOU(), PixelAccuracy()]
-        args.full_log_dir = os.path.join(args.log_dir, dataset_name, split, "pixel")
-        log_writer = SummaryWriter(log_dir=args.full_log_dir) if misc.is_main_process() and args.full_log_dir else None
-        data_loader_test = setup_dataset(args, dataset_name, pixel, split)
-        results = test_on_dataset(args, model, data_loader_test, evaluator_list, device, log_writer)
-        allresults[os.path.join(split, "pixel")] = results
+    # dataset_name = "nebula/OpenSDI_test"
+    # for split in ["sd15", "sd3", "sd2", "flux","sdxl"]:
+    #     ## pixel-level evaluation
+    #     pixel=True
+    #     evaluator_list = [PixelF1(threshold=0.5, mode="origin"), PixelIOU(), PixelAccuracy()]
+    #     args.full_log_dir = os.path.join(args.log_dir, dataset_name, split, "pixel")
+    #     log_writer = SummaryWriter(log_dir=args.full_log_dir) if misc.is_main_process() and args.full_log_dir else None
+    #     data_loader_test = setup_dataset(args, dataset_name, pixel, split)
+    #     results = test_on_dataset(args, model, data_loader_test, evaluator_list, device, log_writer)
+    #     allresults[os.path.join(split, "pixel")] = results
+        
+        ## image-level evaluation
         # pixel=False
         # evaluator_list = [ImageF1(threshold=0.5), ImageAccuracy()]
         # args.full_log_dir = os.path.join(args.log_dir, dataset_name, split, "image")
@@ -214,6 +231,21 @@ def main(args, model_args):
         # results = test_on_dataset(args, model, data_loader_test, evaluator_list, device, log_writer)
         # allresults[os.path.join(split, "image")] = results
 
+    data_json = args.test_data_json
+    with open(data_json, 'r') as f:
+        data_json = json.load(f) # list
+    for name,path in data_json:
+        # pixel-level evaluation
+        print(f"[DEBUG] Testing dataset: {name}, path: {path}")
+        pixel=True
+        # evaluator_list = [PixelF1(threshold=0.5, mode="origin"), PixelIOU(), PixelAccuracy()]
+        evaluator_list = [PixelF1(threshold=0.5, mode="origin"), PixelIOU(), PixelAUC()]
+        args.full_log_dir = os.path.join(args.log_dir, name, "pixel")
+        log_writer = SummaryWriter(log_dir=args.full_log_dir) if misc.is_main_process() and args.full_log_dir else None
+        data_loader_test = setup_dataset(args, path, pixel, name)
+        results = test_on_dataset(args, model, data_loader_test, evaluator_list, device, log_writer, testing_epoch)
+        allresults[os.path.join(name, "pixel")] = results
+    
     print(allresults)
 
 

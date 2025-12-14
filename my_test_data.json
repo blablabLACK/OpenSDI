@@ -1,0 +1,6 @@
+[
+  ["coverage", "/home/aigc_account_1/data01/AIGC/dataset/json_files/coverage_annotations_only_fake.json"],
+  ["casia_v1", "/home/aigc_account_1/data01/AIGC/dataset/json_files/CASIA1_annotations_only_fake.json"],
+  ["columbia", "/home/aigc_account_1/data01/AIGC/dataset/json_files/columbia_annotations_only_fake.json"],
+  ["nist2016", "/home/aigc_account_1/data01/AIGC/dataset/json_files/NIST16_test.json"]
+]

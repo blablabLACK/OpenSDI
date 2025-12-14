@@ -1,0 +1,4 @@
+{"test_pixel-level F1": 0.46531130955266264, "epoch": 70, "dataset": "coverage"}
+{"test_pixel-level F1": 0.6959298459948322, "epoch": 70, "dataset": "casia_v1"}
+{"test_pixel-level F1": 0.8249893224500957, "epoch": 70, "dataset": "columbia"}
+{"test_pixel-level F1": 0.35338647201994194, "epoch": 70, "dataset": "nist2016"}

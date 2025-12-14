@@ -124,7 +124,7 @@ class MaskCLIP(nn.Module):
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.clip.text_projection
         return x
 
-    def forward(self, image, mask, label, edge_mask, *args, **kwargs):
+    def forward(self, image, mask, label, edge_mask,image_path, *args, **kwargs):
         clip_image = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=True)
         with torch.no_grad():
             self.clip.encode_image(clip_image)
@@ -163,6 +163,8 @@ class MaskCLIP(nn.Module):
 
         loss = ce_loss + bce_loss + edge_loss # + dice_loss
 
+        # save_selected_visualizations(image, mask, mask_pred, image_path, "vis_OpenSDI")
+        
         output_dict = {
             "backward_loss": loss,
             "pred_mask": mask_pred,
@@ -180,8 +182,79 @@ class MaskCLIP(nn.Module):
         }
 
         return output_dict
+    
+    @torch.no_grad()
+    def forward_for_flops(self, image):
+        """
+        FLOPs 模式：走完整 forward，但禁用所有 loss & 输出计算，只保留 pred_mask
+        """
+        # 构造 dummy mask / label / edge_mask
+        B, _, H, W = image.shape
+        dummy_mask = torch.zeros(B, 1, H, W, device=image.device)
+        dummy_label = torch.zeros(B, dtype=torch.long, device=image.device)
+        dummy_edge = torch.ones(B, 1, H, W, device=image.device)
+
+        out = self.forward(image, dummy_mask, dummy_label, dummy_edge, None)
+
+        # 仅保留 pred_mask，不考虑 loss
+        return out["pred_mask"]
 
 
+
+# save_selected_visualizations(image, mask,pred_mask, image_path,"vis_mesorch")    
+import os
+import torch
+import torch.nn.functional as F
+def save_selected_visualizations(
+    image, mask, mask_pred, image_names,
+    save_root="selected_visualizations", use_mask01=True
+):
+    os.makedirs(save_root, exist_ok=True)
+    vis_img_list = {
+        "13t",
+        "Sp_D_NNN_A_sec0049_sec0050_0117",
+        "NC2016_0800_0_559_697_768_splice",
+        "NC2016_0830_2357_1362_3506_2615_removal",
+        "Sp_S_NRN_A_sec0060_sec0060_0252",
+        "Sp_D_NRN_A_ani0044_arc0078_0435",
+    }
+    B = image.shape[0]
+    for b in range(B):
+        img_name = os.path.splitext(os.path.basename(image_names[b]))[0]
+
+        # 仅处理特定样本
+        if img_name not in vis_img_list:
+            continue
+
+        # 保存路径
+        os.makedirs(save_root, exist_ok=True)
+        # 保存原图
+        save_tensor_as_image(image[b], os.path.join(save_root, f"{img_name}_img.png"))
+        # 保存GT mask
+        save_tensor_as_image(mask[b], os.path.join(save_root, f"{img_name}_mask.png"))
+        # 保存预测mask
+        if use_mask01:
+            mask01 = (mask_pred[b] > 0.5).float()
+            save_tensor_as_image(mask01, os.path.join(save_root, f"{img_name}_mask01_pred.png"))
+        else:
+            save_tensor_as_image(mask_pred[b], os.path.join(save_root, f"{img_name}_mask_pred.png"))
+        print(f"[✓] Saved visualization for {img_name}")
+
+    print(f"\n✅ 所有指定样本的可视化结果已保存在：{save_root}")
+
+import matplotlib.pyplot as plt
+def save_tensor_as_image(tensor, save_path, cmap='gray'):
+    """保存单通道或三通道 tensor 为图片"""
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    tensor = tensor.detach().cpu()
+    if tensor.ndim == 3 and tensor.shape[0] == 3:
+        plt.imsave(save_path, tensor.permute(1, 2, 0).clip(0, 1).numpy())
+    elif tensor.ndim == 3 and tensor.shape[0] == 1:
+        plt.imsave(save_path, tensor[0].numpy(), cmap=cmap)
+    elif tensor.ndim == 2:
+        plt.imsave(save_path, tensor.numpy(), cmap=cmap)
+    else:
+        raise ValueError(f"Unsupported tensor shape {tensor.shape}")
 
 
 

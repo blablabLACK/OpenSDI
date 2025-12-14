@@ -1,3 +1,7 @@
-
 /.idea
 /sam2
+/output_dir*
+/output_test_ckpt
+/wandb
+/weights
+__pycache__
